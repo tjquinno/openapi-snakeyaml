@@ -85,8 +85,7 @@ class Parser {
         openAPITD.putListPropertyType("security", SecurityRequirement.class);
         openAPITD.putListPropertyType("servers", Server.class);
         openAPITD.putListPropertyType("tags", Tag.class);
-        // Trying the following results in an InstantiationException
-//        openAPITD.putMapPropertyType("paths", String.class, PathItem.class);
+
 
         // This use of a custom constructor is part of a separate experiment.
 //        Constructor topConstructor = new CustomConstructor(openAPITD);
