@@ -5,8 +5,6 @@ Simple example loading a MicroProfile OpenAPI 1.1 yaml file using SnakeYAML 1.24
 The MP OpenAPI `Paths` and `APIResponses` interfaces extend `Map` which seem to cause SnakeYAML to incorrectly instantiate
 the values in the maps.
 
-Note that the `Parser` class declares a custom constructor but as written the code does not currently use it.
-
 To run the test:
 
 ```mvn test```
