@@ -17,9 +17,18 @@
 package io.helidon.examples.openapisnakeyaml;
 
 import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.nio.CharBuffer;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import io.helidon.common.CollectionsHelper;
 import io.smallrye.openapi.api.models.ComponentsImpl;
 import io.smallrye.openapi.api.models.ExternalDocumentationImpl;
 import io.smallrye.openapi.api.models.OpenAPIImpl;
@@ -30,6 +39,7 @@ import io.smallrye.openapi.api.models.callbacks.CallbackImpl;
 import io.smallrye.openapi.api.models.examples.ExampleImpl;
 import io.smallrye.openapi.api.models.headers.HeaderImpl;
 import io.smallrye.openapi.api.models.info.InfoImpl;
+import io.smallrye.openapi.api.models.info.LicenseImpl;
 import io.smallrye.openapi.api.models.links.LinkImpl;
 import io.smallrye.openapi.api.models.media.ContentImpl;
 import io.smallrye.openapi.api.models.media.EncodingImpl;
@@ -43,6 +53,7 @@ import io.smallrye.openapi.api.models.security.SecurityRequirementImpl;
 import io.smallrye.openapi.api.models.security.SecuritySchemeImpl;
 import io.smallrye.openapi.api.models.servers.ServerImpl;
 import io.smallrye.openapi.api.models.servers.ServerVariableImpl;
+import io.smallrye.openapi.api.models.servers.ServerVariablesImpl;
 import io.smallrye.openapi.api.models.tags.TagImpl;
 import org.eclipse.microprofile.openapi.models.Components;
 import org.eclipse.microprofile.openapi.models.ExternalDocumentation;
@@ -54,6 +65,7 @@ import org.eclipse.microprofile.openapi.models.callbacks.Callback;
 import org.eclipse.microprofile.openapi.models.examples.Example;
 import org.eclipse.microprofile.openapi.models.headers.Header;
 import org.eclipse.microprofile.openapi.models.info.Info;
+import org.eclipse.microprofile.openapi.models.info.License;
 import org.eclipse.microprofile.openapi.models.links.Link;
 import org.eclipse.microprofile.openapi.models.media.Content;
 import org.eclipse.microprofile.openapi.models.media.Encoding;
@@ -70,17 +82,31 @@ import org.eclipse.microprofile.openapi.models.servers.Server;
 import org.eclipse.microprofile.openapi.models.servers.ServerVariable;
 import org.eclipse.microprofile.openapi.models.servers.ServerVariables;
 import org.eclipse.microprofile.openapi.models.tags.Tag;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.TypeDescription;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
+import org.yaml.snakeyaml.introspector.Property;
 import org.yaml.snakeyaml.nodes.MappingNode;
 import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.NodeId;
+import org.yaml.snakeyaml.nodes.NodeTuple;
 import org.yaml.snakeyaml.nodes.ScalarNode;
+import org.yaml.snakeyaml.nodes.SequenceNode;
+import org.yaml.snakeyaml.representer.Representer;
 
 class Parser {
 
     static OpenAPI parse(InputStream is) {
         return parseYAML(is);
+    }
+
+    static void toYAML(OpenAPI openAPI, Writer writer) {
+        DumperOptions opts = new DumperOptions();
+        opts.setIndent(2);
+        opts.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        Yaml yaml = new Yaml(new CustomRepresenter(), opts);
+        yaml.dump(openAPI, new TagSuppressingWriter(writer));
     }
 
     private static OpenAPI parseYAML(InputStream inputStream) {
@@ -93,11 +119,14 @@ class Parser {
         Constructor topConstructor = new CustomConstructor(openAPITD);
 
         topConstructor.addTypeDescription(new TypeDescription(Info.class, InfoImpl.class));
+        topConstructor.addTypeDescription(new TypeDescription(License.class, LicenseImpl.class));
+        topConstructor.addTypeDescription(new TypeDescription(Content.class, ContentImpl.class));
         topConstructor.addTypeDescription(new TypeDescription(ExternalDocumentation.class, ExternalDocumentationImpl.class));
 
         TypeDescription serverTD = new TypeDescription(Server.class, ServerImpl.class);
-        serverTD.addPropertyParameters("variables", String.class, ServerVariable.class);
         topConstructor.addTypeDescription(serverTD);
+
+        topConstructor.addTypeDescription(new TypeDescription(ServerVariables.class, ServerVariablesImpl.class));
 
         TypeDescription serverVariableTD = new TypeDescription(ServerVariable.class, ServerVariableImpl.class);
         serverVariableTD.addPropertyParameters("enumeration", String.class);
@@ -145,15 +174,8 @@ class Parser {
         componentsTD.addPropertyParameters("callbacks", String.class, Callback.class);
         topConstructor.addTypeDescription(componentsTD);
 
-        TypeDescription schemaTD = new TypeDescription(Schema.class, SchemaImpl.class) {
-            @Override
-            public Object newInstance(String propertyName, Node node) {
-                if (propertyName.equals("type")) {
-                    return Schema.SchemaType.valueOf(((ScalarNode) node).getValue().toUpperCase());
-                }
-                return super.newInstance(propertyName, node);
-            }
-        };
+        TypeDescription schemaTD = TypeDescriptionWithEnums.newInstance(Schema.class, SchemaImpl.class)
+                .addEnum("type", Schema.SchemaType::valueOf);
         schemaTD.addPropertyParameters("properties", String.class, Schema.class);
         schemaTD.addPropertyParameters("required", String.class);
         schemaTD.addPropertyParameters("allOf", Schema.class);
@@ -166,15 +188,8 @@ class Parser {
         apiResponseTD.addPropertyParameters("links", String.class, Link.class);
         topConstructor.addTypeDescription(apiResponseTD);
 
-        TypeDescription parameterTD = new TypeDescription(Parameter.class, ParameterImpl.class) {
-            @Override
-            public Object newInstance(String propertyName, Node node) {
-                if (propertyName.equals("in")) {
-                    return Parameter.In.valueOf(((ScalarNode) node).getValue().toUpperCase());
-                }
-                return super.newInstance(propertyName, node);
-            }
-        };
+        TypeDescription parameterTD = TypeDescriptionWithEnums.newInstance(Parameter.class, ParameterImpl.class)
+            .addEnum("in", Parameter.In::valueOf);
         parameterTD.addPropertyParameters("examples", String.class, Example.class);
         topConstructor.addTypeDescription(parameterTD);
 
@@ -187,24 +202,21 @@ class Parser {
         mediaTypeTD.addPropertyParameters("examples", String.class, Example.class);
         topConstructor.addTypeDescription(mediaTypeTD);
 
-        TypeDescription encodingTD = new TypeDescription(Encoding.class, EncodingImpl.class);
+        TypeDescription encodingTD = TypeDescriptionWithEnums.newInstance(Encoding.class, EncodingImpl.class)
+                .addEnum("style", Encoding.Style::valueOf);
         encodingTD.addPropertyParameters("headers", String.class, Header.class);
         topConstructor.addTypeDescription(encodingTD);
 
-        TypeDescription headerTD = new TypeDescription(Header.class, HeaderImpl.class);
+        TypeDescription headerTD = TypeDescriptionWithEnums.newInstance(Header.class,
+                HeaderImpl.class)
+                    .addEnum("in", Parameter.In::valueOf)
+                    .addEnum("style", Parameter.Style::valueOf);
         headerTD.addPropertyParameters("examples", String.class, Example.class);
         topConstructor.addTypeDescription(headerTD);
 
-        topConstructor.addTypeDescription(new TypeDescription(SecurityScheme.class,
-                SecuritySchemeImpl.class) {
-            @Override
-            public Object newInstance(String propertyName, Node node) {
-                if (propertyName.equals("in")) {
-                    return SecurityScheme.In.valueOf(((ScalarNode) node).getValue().toUpperCase());
-                }
-                return super.newInstance(propertyName, node);
-            }
-        });
+        topConstructor.addTypeDescription(TypeDescriptionWithEnums.newInstance(SecurityScheme.class, SecuritySchemeImpl.class)
+                .addEnum("in", SecurityScheme.In::valueOf)
+                .addEnum("type", SecurityScheme.Type::valueOf));
         topConstructor.addTypeDescription(new TypeDescription(Link.class, LinkImpl.class));
 
         TypeDescription callbackTD = new TypeDescription(Callback.class, CallbackImpl.class);
@@ -230,16 +242,17 @@ class Parser {
 
     private static class CustomConstructor extends Constructor {
 
-        private static final Map<Class<?>, Class<?>> childTypes = new HashMap<>();
+        private static final Map<Class<?>, Class<?>> childMapTypes = new HashMap<>();
+        private static final Map<Class<?>, Class<?>> childMapOfListTypes = new HashMap<>();
 
         static {
-            childTypes.put(Paths.class, PathItem.class);
-            childTypes.put(Callback.class, PathItem.class);
-            childTypes.put(Content.class, MediaType.class);
-            childTypes.put(APIResponses.class, APIResponse.class);
-            childTypes.put(ServerVariables.class, ServerVariable.class);
-            childTypes.put(Scopes.class, String.class);
-            childTypes.put(SecurityRequirement.class, String.class);
+            childMapTypes.put(Paths.class, PathItem.class);
+            childMapTypes.put(Callback.class, PathItem.class);
+            childMapTypes.put(Content.class, MediaType.class);
+            childMapTypes.put(APIResponses.class, APIResponse.class);
+            childMapTypes.put(ServerVariables.class, ServerVariable.class);
+            childMapTypes.put(Scopes.class, String.class);
+            childMapOfListTypes.put(SecurityRequirement.class, String.class);
         }
 
         CustomConstructor(TypeDescription td) {
@@ -249,16 +262,119 @@ class Parser {
         @Override
         protected void constructMapping2ndStep(MappingNode node, Map<Object, Object> mapping) {
             Class<?> parentType = node.getType();
-            if (childTypes.containsKey(parentType)) {
-                Class<?> childType = childTypes.get(parentType);
+            if (childMapTypes.containsKey(parentType)) {
+                Class<?> childType = childMapTypes.get(parentType);
                 node.getValue().forEach(tuple -> {
                     Node valueNode = tuple.getValueNode();
                     if (valueNode.getType() == Object.class) {
                         valueNode.setType(childType);
                     }
                 });
+            } else if (childMapOfListTypes.containsKey(parentType)) {
+                Class<?> childType = childMapOfListTypes.get(parentType);
+                node.getValue().forEach(tuple -> {
+                    Node valueNode = tuple.getValueNode();
+                    if (valueNode.getNodeId() == NodeId.sequence) {
+                        SequenceNode seqNode = (SequenceNode) valueNode;
+                        seqNode.setListType(childType);
+                    }
+                });
             }
             super.constructMapping2ndStep(node, mapping);
+        }
+    }
+
+    private static class CustomRepresenter extends Representer {
+
+        private static final Map<Class<?>, Set<String>> childEnumNames = new HashMap<>();
+        private static final Map<Class<?>, Map<String, Set<String>>> childEnumValues =
+                new HashMap<>();
+
+        static {
+            childEnumNames.put(PathItemImpl.class, toEnumNames(PathItem.HttpMethod.class));
+            childEnumValues.put(SchemaImpl.class,
+                    CollectionsHelper.mapOf("type", toEnumNames(Schema.SchemaType.class)));
+            childEnumValues.put(ParameterImpl.class,
+                    CollectionsHelper.mapOf("style", toEnumNames(Parameter.Style.class),
+                            "in", toEnumNames(Parameter.In.class)));
+        }
+
+        private static <E extends Enum<E>> Set<String> toEnumNames(Class<E> enumType) {
+            Set<String> result = new HashSet<>();
+            for (Enum<E> e : enumType.getEnumConstants()) {
+                result.add(e.name());
+            }
+            return result;
+        }
+
+        @Override
+        protected NodeTuple representJavaBeanProperty(Object javaBean, Property property, Object propertyValue,
+                org.yaml.snakeyaml.nodes.Tag customTag) {
+            if (propertyValue == null) {
+                return null;
+            }
+            NodeTuple result = super.representJavaBeanProperty(javaBean, property, propertyValue, customTag);
+
+            if (childEnumNames.getOrDefault(javaBean.getClass(), Collections.emptySet()).contains(property.getName())) {
+                result = new NodeTuple(adjustNode(result.getKeyNode()), result.getValueNode());
+            }
+            if (propertyValue instanceof Enum && childEnumValues.getOrDefault(javaBean.getClass(),
+                    Collections.emptyMap())
+                    .getOrDefault(property.getName(), Collections.emptySet())
+                    .contains(((Enum) propertyValue).name())) {
+                result = new NodeTuple(result.getKeyNode(), adjustNode(result.getValueNode()));
+            }
+            return result;
+        }
+
+        private static Node adjustNode(Node n) {
+            Node result = n;
+            if (n instanceof ScalarNode) {
+                ScalarNode orig = (ScalarNode) n;
+                result = new ScalarNode(orig.getTag(), orig.getValue()
+                        .toLowerCase(),
+                        orig.getStartMark(), orig.getEndMark(), orig.getScalarStyle());
+            }
+            return result;
+        }
+    }
+
+    /**
+     * Suppress the tag output so the resulting document can be read into any MP OpenAPI
+     * implementation, not just SmallRye's.
+     */
+    static class TagSuppressingWriter extends PrintWriter {
+
+        private static final Pattern UNQUOTED_TRAILING_TAG_PATTERN = Pattern.compile("\\![^\"]+$");
+
+        TagSuppressingWriter(Writer out) {
+            super(out);
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) {
+            int effLen = detag(CharBuffer.wrap(cbuf), off, len);
+            if (effLen > 0) {
+                super.write(cbuf, off, effLen);
+            }
+        }
+
+        @Override
+        public void write(String s, int off, int len) {
+            int effLen = detag(s, off, len);
+            if (effLen > 0) {
+                super.write(s, off, effLen);
+            }
+        }
+
+        private int detag(CharSequence cs, int off, int len) {
+            int result = len;
+            Matcher m = UNQUOTED_TRAILING_TAG_PATTERN.matcher(cs.subSequence(off, off + len));
+            if (m.matches()) {
+                result = len - (m.end() - m.start());
+            }
+
+            return result;
         }
     }
 }

@@ -17,26 +17,30 @@
 package io.helidon.examples.openapisnakeyaml;
 
 import org.eclipse.microprofile.openapi.models.OpenAPI;
-import org.eclipse.microprofile.openapi.models.Operation;
-import org.eclipse.microprofile.openapi.models.PathItem;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Map;
+import java.io.OutputStreamWriter;
 
 public class TestParser {
 
     @Test
-    public void testParser() throws IOException {
-        try (InputStream is = getClass().getResourceAsStream("/openapi-greeting.yml")) {
+    public void testParserUsingYAML() throws IOException {
+        runTest("/openapi-greeting.yml");
+    }
+
+    @Test
+    public void testParserUsingJSON() throws IOException {
+        runTest("/petstore.json");
+    }
+
+    private void runTest(String path) throws IOException {
+        try (InputStream is = getClass().getResourceAsStream(path)) {
             OpenAPI openAPI = Parser.parse(is);
-            // Following fails: class java.util.LinkedHashMap cannot be cast to class org.eclipse.microprofile.openapi.models.PathItem
-            System.err.println("getPathItems should be returns " + openAPI.getPaths().getPathItems().getClass().getName());
-            System.err.flush();
-            openAPI.getPaths().getPathItems().forEach((operationName, pathItem) -> {
-                Map<PathItem.HttpMethod, Operation> operations = pathItem.getOperations();
-            });
+
+            Parser.toYAML(openAPI, new OutputStreamWriter(System.err));
         }
     }
+
 }
